@@ -64,6 +64,7 @@ public class CommandLine
       
       public static void main(String[] args)
       {
+
 	 int argindex=0;
 
 	 Properties props=new Properties();

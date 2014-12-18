@@ -40,6 +40,7 @@ insertproportion=0.05
 requestdistribution=zipfian
 
 maxscanlength=100
+hosts = 127.0.0.1
 
 scanlengthdistribution=uniform
 

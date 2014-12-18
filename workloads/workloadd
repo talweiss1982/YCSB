@@ -36,6 +36,7 @@ readproportion=0.95
 updateproportion=0
 scanproportion=0
 insertproportion=0.05
+hosts = 127.0.0.1
 
 requestdistribution=latest
 

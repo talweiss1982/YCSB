@@ -42,6 +42,7 @@ DATABASES = {
     "orientdb"     : "com.yahoo.ycsb.db.OrientDBClient",
     "redis"        : "com.yahoo.ycsb.db.RedisClient", 
     "voldemort"    : "com.yahoo.ycsb.db.VoldemortClient", 
+	"ravendb"      : "com.yahoo.ycsb.db.RavenDBClient",
 }
 
 OPTIONS = {
@@ -113,4 +114,5 @@ ycsb_command = ["java", "-cp", os.pathsep.join(find_jars(ycsb_home, database)), 
 if command:
     ycsb_command.append(command)
 print " ".join(ycsb_command)
+
 subprocess.call(ycsb_command)
