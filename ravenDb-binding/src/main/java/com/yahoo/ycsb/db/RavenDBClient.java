@@ -24,9 +24,10 @@ public class RavenDBClient extends DB {
     }
     @Override
     public int read(String table, String key, Set<String> fields, HashMap<String, ByteIterator> result) {
-        JsonDocument obj = getStoreInstance().getDatabaseCommands().get(key);
-        for (String field : fields) {
-            result.put(field, new StringByteIterator(obj.getDataAsJson().get(field).toString()));
+        JsonDocument doc = getStoreInstance().getDatabaseCommands().get(key);
+        RavenJObject obj = doc.getDataAsJson();
+        for (String field : (fields == null)?obj.getKeys():fields) {
+            result.put(field, new StringByteIterator(obj.get(field).toString()));
         }
         return 0;
     }
@@ -37,7 +38,7 @@ public class RavenDBClient extends DB {
         while (iterator.hasNext()) {
             HashMap<String, ByteIterator> docFields = new HashMap<>();
             RavenJObject document = iterator.next();
-            for (String field : fields) {
+            for (String field : (fields == null)?document.getKeys():fields) {
                 docFields.put(field, new StringByteIterator(document.get(field).toString()));
             }
             result.add(docFields);
