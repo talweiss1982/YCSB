@@ -5,6 +5,8 @@ package com.yahoo.ycsb.db;
 
 import com.yahoo.ycsb.*;
 import net.ravendb.abstractions.basic.CloseableIterator;
+import net.ravendb.abstractions.basic.EventHandler;
+import net.ravendb.abstractions.connection.WebRequestEventArgs;
 import net.ravendb.abstractions.data.JsonDocument;
 import net.ravendb.abstractions.json.linq.RavenJObject;
 import net.ravendb.client.IDocumentSession;
@@ -12,15 +14,40 @@ import net.ravendb.client.IDocumentStore;
 import net.ravendb.client.connection.IDatabaseCommands;
 import net.ravendb.client.document.BulkInsertOperation;
 import net.ravendb.client.document.DocumentStore;
+import org.apache.http.HttpHost;
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.HttpRequestBase;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.Vector;
 
+
+
 public class RavenDBClient extends DB {
+
+    public static class FiddlerConfigureRequestHandler implements EventHandler<WebRequestEventArgs> {
+
+        @Override
+        public void handle(Object sender, WebRequestEventArgs event) {
+            HttpRequestBase requestBase = (HttpRequestBase) event.getRequest();
+            HttpHost proxy = new HttpHost("127.0.0.1", 8888, "http");
+            RequestConfig requestConfig = requestBase.getConfig();
+            if (requestConfig == null) {
+                requestConfig = RequestConfig.DEFAULT;
+            }
+            requestConfig = RequestConfig.copy(requestConfig).setProxy(proxy).build();
+            requestBase.setConfig(requestConfig);
+
+        }
+    }
+
     @Override
     public void init() throws DBException {
+   /*     System.setProperty("http.proxyHost", "localhost");
+        System.setProperty("http.proxyPort", "8888");*/
+        System.setProperty("java.net.useSystemProxies", "true");
     }
     @Override
     public int read(String table, String key, Set<String> fields, HashMap<String, ByteIterator> result) {
@@ -110,8 +137,9 @@ public class RavenDBClient extends DB {
     }
 
     private static IDocumentStore createStore() {
-        IDocumentStore store = new DocumentStore("http://localhost:8080", "Test");
+        IDocumentStore store = new DocumentStore("http://127.0.0.1:8080", "Test");
         store.initialize();
+        store.getJsonRequestFactory().addConfigureRequestEventHandler(new FiddlerConfigureRequestHandler());
         return store;
     }
 
