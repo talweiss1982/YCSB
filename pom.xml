@@ -143,6 +143,7 @@ LICENSE file.
     <openjpa.jdbc.version>2.1.1</openjpa.jdbc.version>
     <orientdb.version>2.2.37</orientdb.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <ravendb.version>4.1</ravendb.version>
     <redis.version>2.9.0</redis.version>
     <riak.version>2.0.5</riak.version>
     <rocksdb.version>6.2.2</rocksdb.version>
@@ -200,6 +201,7 @@ LICENSE file.
     <module>orientdb</module>
     <module>postgrenosql</module>
     <module>rados</module>
+    <module>ravendb</module>
     <module>redis</module>
     <module>rest</module>
     <module>riak</module>
