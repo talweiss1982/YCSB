@@ -1,12 +1,19 @@
 package site.ycsb.db;
 
 import net.ravendb.client.documents.*;
+import net.ravendb.client.documents.operations.GetStatisticsOperation;
 import net.ravendb.client.documents.session.IDocumentSession;
+import net.ravendb.client.exceptions.ConcurrencyException;
+import net.ravendb.client.exceptions.database.DatabaseDoesNotExistException;
+import net.ravendb.client.serverwide.DatabaseRecord;
+import net.ravendb.client.serverwide.operations.CreateDatabaseOperation;
 import site.ycsb.*;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * RavenDB binding for YCSB framework.
  */
@@ -16,31 +23,50 @@ public class RavenDBClient extends DB {
   private static String defaultDatabaseName = "";
   private String database;
   private static  IDocumentStore store;
+  private static final AtomicInteger INIT_COUNT = new AtomicInteger(0);
 
   @Override
   public void init() throws DBException {
-    Properties props = getProperties();
-    serverUrl = props.getProperty("url", defaultServerUrl);
-    database = props.getProperty("database", defaultDatabaseName);
-    getStoreInstance(serverUrl, database);
-  }
-
-  private IDocumentStore getStoreInstance(String ravendbUrl, String dbName) {
+    INIT_COUNT.incrementAndGet();
     if (store == null) {
       synchronized (RavenDBClient.class) {
         if (store == null) {
-          store = createStore(ravendbUrl, dbName);
+          store = createStore();
         }
       }
     }
-    return store;
-
   }
 
-  private IDocumentStore createStore(String ravendbUrl, String dbName) {
-    IDocumentStore documentStore = new DocumentStore(ravendbUrl, dbName);
+  @Override
+  public void cleanup() throws DBException {
+    if (INIT_COUNT.decrementAndGet() == 0) {
+      try {
+        store.close();
+      } catch (Exception e) {
+        throw new DBException(e);
+      }
+    }
+  }
+  private IDocumentStore createStore() {
+    Properties props = getProperties();
+    serverUrl = props.getProperty("url", defaultServerUrl);
+    database = props.getProperty("database", defaultDatabaseName);
+    IDocumentStore documentStore = new DocumentStore(serverUrl, database);
     documentStore.initialize();
+    ensureDatabaseCreated();
     return documentStore;
+  }
+
+  private void ensureDatabaseCreated() {
+    try {
+      store.maintenance().forDatabase(database).send(new GetStatisticsOperation());
+    } catch (DatabaseDoesNotExistException dde) {
+      try {
+        store.maintenance().server().send(new CreateDatabaseOperation(new DatabaseRecord(database)));
+      } catch (ConcurrencyException ce) {
+        // The database was already created before calling CreateDatabaseOperation
+      }
+    }
   }
 
   @Override
