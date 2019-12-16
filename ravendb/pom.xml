@@ -11,7 +11,7 @@
   </parent>
 
     <groupId>ravendb</groupId>
-    <artifactId>Raven DB bindings</artifactId>
+    <artifactId>ravendb-bindings</artifactId>
     <packaging>jar</packaging>
 
   <dependencies>
