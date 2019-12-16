@@ -164,11 +164,11 @@ LICENSE file.
       <artifactId>hypertable-binding</artifactId>
       <version>${project.version}</version>
     </dependency>
-    <dependency>
+    <!--dependency>
       <groupId>site.ycsb</groupId>
       <artifactId>ignite-binding</artifactId>
       <version>${project.version}</version>
-    </dependency>
+    </dependency-->
     <dependency>
       <groupId>site.ycsb</groupId>
       <artifactId>infinispan-binding</artifactId>
@@ -222,6 +222,11 @@ LICENSE file.
     <dependency>
       <groupId>site.ycsb</groupId>
       <artifactId>rados-binding</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>site.ycsb</groupId>
+      <artifactId>ravendb-binding</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>

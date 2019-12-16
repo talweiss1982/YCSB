@@ -10,8 +10,8 @@
     <relativePath>../binding-parent</relativePath>
   </parent>
 
-    <groupId>ravendb</groupId>
-    <artifactId>ravendb-bindings</artifactId>
+    <name>ravendb</name>
+    <artifactId>ravendb-binding</artifactId>
     <packaging>jar</packaging>
 
   <dependencies>
