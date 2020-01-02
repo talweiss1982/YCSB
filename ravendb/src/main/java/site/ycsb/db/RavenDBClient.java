@@ -1,69 +1,118 @@
+/**
+ * Copyright (c) 2012 YCSB contributors. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you
+ * may not use this file except in compliance with the License. You
+ * may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+ * implied. See the License for the specific language governing
+ * permissions and limitations under the License. See accompanying
+ * LICENSE file.
+ */
+
 package site.ycsb.db;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import net.ravendb.client.documents.*;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import net.ravendb.client.documents.operations.GetStatisticsOperation;
-import net.ravendb.client.documents.session.IDocumentSession;
 import net.ravendb.client.exceptions.ConcurrencyException;
 import net.ravendb.client.exceptions.database.DatabaseDoesNotExistException;
 import net.ravendb.client.serverwide.DatabaseRecord;
 import net.ravendb.client.serverwide.operations.CreateDatabaseOperation;
 import site.ycsb.*;
+import net.ravendb.client.Constants;
+import net.ravendb.client.documents.DocumentStore;
+import net.ravendb.client.documents.commands.*;
+import net.ravendb.client.documents.commands.batches.BatchCommand;
+import net.ravendb.client.documents.commands.batches.ICommandData;
+import net.ravendb.client.documents.commands.batches.PutCommandDataWithJson;
+import net.ravendb.client.documents.queries.IndexQuery;
 
-import com.fasterxml.jackson.databind.node.ObjectNode;
-
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.security.KeyStore;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * RavenDB binding for YCSB framework.
+ * YCSB binding for RavenDB.
  */
 public class RavenDBClient extends DB {
-  private String serverUrl;
-  private static String defaultServerUrl = "http://localhost:8080";
-  private static String defaultDatabaseName = "ycsb";
-  private String database;
-  private ObjectMapper objectMapper = new ObjectMapper();
-  private static  IDocumentStore store;
+
+  public static final String RAVENDB_URL = "ravendb.url";
+  public static final String RAVENDB_DATABASE = "ravendb.database";
+  public static final String RAVENDB_CERTIFICATE = "ravendb.certificate";
+
+  /** The batch size to use for inserts. */
+  private static int batchSize;
+
+  private static DocumentStore store;
+  private static ObjectMapper mapper;
+
+  private final List<ICommandData> bulkInserts = new ArrayList<ICommandData>();
+
+  public static DocumentStore getStore() {
+    return store;
+  }
+
+  /**
+   * Count the number of times initialized to teardown on the last
+   * {@link #cleanup()}.
+   */
   private static final AtomicInteger INIT_COUNT = new AtomicInteger(0);
 
   @Override
   public void init() throws DBException {
     INIT_COUNT.incrementAndGet();
-    if (store == null) {
-      synchronized (RavenDBClient.class) {
-        if (store == null) {
-          store = createStore();
-        }
+    synchronized (RavenDBClient.class) {
+      if (store != null) {
+        return;
       }
-    }
-  }
 
-  @Override
-  public void cleanup() throws DBException {
-    if (INIT_COUNT.decrementAndGet() == 0) {
+      Properties props = getProperties();
+
+      String urls = props.getProperty(RAVENDB_URL, "http://localhost:8080");
+      String databaseName = props.getProperty(RAVENDB_DATABASE, "ycsb");
+      String certificatePath = props.getProperty(RAVENDB_CERTIFICATE, null);
+      batchSize = Integer.parseInt(props.getProperty("batchsize", "1"));
+
       try {
-        store.close();
-      } catch (Exception e) {
-        throw new DBException(e);
+        DocumentStore documentStore = new DocumentStore(urls.split(","), databaseName);
+
+        if (certificatePath != null) {
+          KeyStore clientStore = KeyStore.getInstance("PKCS12");
+          clientStore.load(new FileInputStream(certificatePath), "".toCharArray());
+          documentStore.setCertificate(clientStore);
+        }
+
+        documentStore.initialize();
+        System.out.println("ravendb client connection created with " + urls);
+        store = documentStore;
+        mapper = store.getConventions().getEntityMapper();
+        ensureDatabaseCreated(databaseName);
+      } catch (Exception e1) {
+        System.err
+            .println("Could not initialize RavenDB store:"
+                + e1.toString());
+        e1.printStackTrace();
+        return;
       }
     }
   }
-  private IDocumentStore createStore() {
-    Properties props = getProperties();
-    serverUrl = props.getProperty("url", defaultServerUrl);
-    database = props.getProperty("database", defaultDatabaseName);
-    store = new DocumentStore(serverUrl, database);
-    store.initialize();
-    ensureDatabaseCreated();
-    return store;
-  }
 
-  private void ensureDatabaseCreated() {
+  private void ensureDatabaseCreated(String database) {
     try {
       store.maintenance().forDatabase(database).send(new GetStatisticsOperation());
     } catch (DatabaseDoesNotExistException dde) {
       try {
+        System.out.println("creating missing database: " + database);
         store.maintenance().server().send(new CreateDatabaseOperation(new DatabaseRecord(database)));
       } catch (ConcurrencyException ce) {
         // The database was already created before calling CreateDatabaseOperation
@@ -72,24 +121,68 @@ public class RavenDBClient extends DB {
   }
 
   @Override
-  public Status read(String table, String key, Set<String> fields, Map<String, ByteIterator> result) {
-    try (IDocumentSession session = store.openSession()) {
-      ObjectNode document = session.load(ObjectNode.class, key);
-      populateFieldsForSingleDocument(fields, result, document);
+  public void cleanup() throws DBException {
+    if (!bulkInserts.isEmpty()) {
+      BatchCommand batchCommand = new BatchCommand(store.getConventions(), bulkInserts);
+      store.getRequestExecutor().execute(batchCommand);
+
+      bulkInserts.clear();
     }
-    return Status.OK;
+
+    if (INIT_COUNT.decrementAndGet() == 0) {
+      try {
+        store.close();
+      } catch (Exception e1) {
+        System.err.println("Could not close RavenDB document store: "
+            + e1.toString());
+        e1.printStackTrace();
+        return;
+      } finally {
+        store = null;
+      }
+    }
   }
 
-  private void populateFieldsForSingleDocument(Set<String> fields, Map<String, ByteIterator> result,
-                                               ObjectNode document) {
-    if(fields == null){
-      document.fields().forEachRemaining(e-> result.put(e.getKey(),
-          new ByteArrayByteIterator(e.getValue().toString().getBytes())));
-    } else {
-      for (String field: fields){
-        //TODO:see if we can have an array pool of ByteArrayByteIterator
-        //TODO:see if we can extract the bytes in a cheaper way
-        result.put(field, new ByteArrayByteIterator(document.get(field).toString().getBytes()));
+  private String documentId(String table, String key) {
+    return table + "/" + key;
+  }
+
+  @Override
+  public Status read(String table, String key, Set<String> fields, Map<String, ByteIterator> result) {
+    try {
+      String documentId = documentId(table, key);
+
+      GetDocumentsCommand command = new GetDocumentsCommand(documentId, null, false);
+      store.getRequestExecutor().execute(command);
+      GetDocumentsResult commandResult = command.getResult();
+
+      if (commandResult != null && commandResult.getResults().size() > 0) {
+        JsonNode json = commandResult.getResults().get(0);
+        fillMap(json, result, fields);
+        return Status.OK;
+      } else {
+        return Status.NOT_FOUND;
+      }
+    } catch (Exception e) {
+      e.printStackTrace();
+      return Status.ERROR;
+    }
+  }
+
+  private void fillMap(JsonNode json, Map<String, ByteIterator> result, Set<String> fields) {
+    boolean checkFields = fields != null && !fields.isEmpty();
+    for (Iterator<Map.Entry<String, JsonNode>> jsonFields = json.fields();
+         jsonFields.hasNext();
+      /* increment in loop body */) {
+
+      Map.Entry<String, JsonNode> jsonField = jsonFields.next();
+      String name = jsonField.getKey();
+      if ((checkFields && !fields.contains(name)) || Constants.Documents.Metadata.KEY.equals(name)) {
+        continue;
+      }
+      JsonNode jsonValue = jsonField.getValue();
+      if (jsonValue != null && !jsonValue.isNull()) {
+        result.put(name, new StringByteIterator(jsonValue.asText()));
       }
     }
   }
@@ -97,69 +190,125 @@ public class RavenDBClient extends DB {
   @Override
   public Status scan(String table, String startkey, int recordcount, Set<String> fields,
                      Vector<HashMap<String, ByteIterator>> result) {
-    try (IDocumentSession session = store.openSession()) {
-      //RavenDB scan starts after the given key so we need to fetch the first key separately but we
-      // can do this in one round trip.
-      Lazy<ObjectNode> first =  session.advanced().lazily().load(ObjectNode.class, startkey);
-      Lazy<Map<String, ObjectNode>> rest = session.advanced().lazily().loadStartingWith(
-          ObjectNode.class, null, null, 0, recordcount-1, null, startkey);
-      session.advanced().eagerly().executeAllPendingLazyOperations();
-      HashMap<String, ByteIterator> map = new HashMap<>();
-      populateFieldsForSingleDocument(fields, map , first.getValue());
-      result.add(map);
-      //RavenDB client returns a Map we must sort the keys to get them in the right order.
-      Map<String, ObjectNode> documents = rest.getValue();
-      List<String> sortedKeys = new ArrayList(documents.keySet());
-      Collections.sort(sortedKeys);
-      for (String key : sortedKeys) {
-        map = new HashMap<>();
-        populateFieldsForSingleDocument(fields, map , documents.get(key));
-        result.add(map);
+    StringBuilder queryBuilder = new StringBuilder();
+
+    try {
+      String documentId = documentId(table, startkey);
+
+      queryBuilder.append("from '")
+          .append(table)
+          .append("' where id() >= '")
+          .append(documentId)
+          .append("'");
+
+      IndexQuery indexQuery = new IndexQuery(queryBuilder.toString());
+      indexQuery.setPageSize(recordcount);
+      indexQuery.setWaitForNonStaleResults(true);
+      QueryCommand queryCommand = new QueryCommand(store.getConventions(), indexQuery, false, false);
+
+      store.getRequestExecutor().execute(queryCommand);
+
+      ArrayNode results = queryCommand.getResult().getResults();
+      if (results.size() == 0) {
+        return Status.ERROR;
+      }
+
+      result.ensureCapacity(recordcount);
+
+      for (int i = 0; i < results.size(); i++) {
+        JsonNode json = results.get(i);
+        HashMap<String, ByteIterator> resultMap =
+            new HashMap<String, ByteIterator>();
+
+        fillMap(json, resultMap, fields);
+        result.add(resultMap);
       }
       return Status.OK;
+    } catch (Exception e) {
+      e.printStackTrace();
+      return Status.ERROR;
     }
   }
 
   @Override
   public Status update(String table, String key, Map<String, ByteIterator> values) {
-    try (IDocumentSession session = store.openSession()) {
-      ObjectNode document = session.load(ObjectNode.class, key);
-      for(Map.Entry<String, ByteIterator> entry : values.entrySet()){
-        document.put(entry.getKey(), entry.getValue().toArray());
-      }
-      session.saveChanges();
-      return Status.OK;
-    }
+    return insertSingle(table, key, values);
   }
 
   @Override
   public Status insert(String table, String key, Map<String, ByteIterator> values) {
-    try (IDocumentSession session = store.openSession()) {
-      ObjectNode document = generateJsonFromFields(values, table);
-      session.store(document, key);
-      session.saveChanges();
+    if (batchSize == 1){
+      return insertSingle(table, key, values);
+    }
+    return insertUsingBatch(table, key, values);
+  }
+
+  private Status insertSingle(String table, String key, Map<String, ByteIterator> values) {
+    String documentId = documentId(table, key);
+
+    try {
+      ObjectNode node = toJson(values, table);
+
+      PutDocumentCommand command = new PutDocumentCommand(documentId, null, node);
+      store.getRequestExecutor().execute(command);
+
       return Status.OK;
+    } catch (Exception e) {
+      e.printStackTrace();
+      return Status.ERROR;
     }
   }
 
-  private ObjectNode generateJsonFromFields(Map<String, ByteIterator> values, String table) {
-    ObjectNode document = objectMapper.createObjectNode();
-    for(Map.Entry<String, ByteIterator> entry : values.entrySet()){
-      document.put(entry.getKey(), entry.getValue().toArray());
+  private Status insertUsingBatch(String table, String key, Map<String, ByteIterator> values) {
+    try {
+      String documentId = documentId(table, key);
+      ObjectNode document = toJson(values, table);
+
+      ICommandData command = new PutCommandDataWithJson(documentId, null, document);
+      bulkInserts.add(command);
+
+      if (bulkInserts.size() == batchSize) {
+
+        BatchCommand batchCommand = new BatchCommand(store.getConventions(), bulkInserts);
+        store.getRequestExecutor().execute(batchCommand);
+
+        bulkInserts.clear();
+        return Status.OK;
+      } else {
+        return Status.BATCHED_OK;
+      }
+    } catch (Exception e) {
+      e.printStackTrace();
+      return Status.ERROR;
     }
-    ObjectNode metadata = objectMapper.createObjectNode();
-    metadata.put("@collection", table);
-    document.set("@metadata", metadata);
-    return document;
   }
 
   @Override
   public Status delete(String table, String key) {
-    try (IDocumentSession session = store.openSession()) {
-      session.delete(key);
-      session.saveChanges();
+    String documentId = documentId(table, key);
+
+    try {
+      DeleteDocumentCommand command = new DeleteDocumentCommand(documentId);
+      store.getRequestExecutor().execute(command);
       return Status.OK;
+
+    } catch (Exception e) {
+      return Status.ERROR;
     }
   }
 
+  protected static ObjectNode toJson(Map<String, ByteIterator> values, String collection)
+      throws IOException {
+    ObjectNode node = mapper.createObjectNode();
+    Map<String, String> stringMap = StringByteIterator.getStringMap(values);
+    for (Map.Entry<String, String> pair : stringMap.entrySet()) {
+      node.put(pair.getKey(), pair.getValue());
+    }
+
+    ObjectNode metadata = mapper.createObjectNode();
+    metadata.set(Constants.Documents.Metadata.COLLECTION, mapper.valueToTree(collection));
+    node.set(Constants.Documents.Metadata.KEY, metadata);
+
+    return node;
+  }
 }
