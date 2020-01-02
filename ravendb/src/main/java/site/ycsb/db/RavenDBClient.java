@@ -1,5 +1,6 @@
 package site.ycsb.db;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import net.ravendb.client.documents.*;
 import net.ravendb.client.documents.operations.GetStatisticsOperation;
 import net.ravendb.client.documents.session.IDocumentSession;
@@ -20,8 +21,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class RavenDBClient extends DB {
   private String serverUrl;
   private static String defaultServerUrl = "http://localhost:8080";
-  private static String defaultDatabaseName = "";
+  private static String defaultDatabaseName = "ycsb";
   private String database;
+  private ObjectMapper objectMapper = new ObjectMapper();
   private static  IDocumentStore store;
   private static final AtomicInteger INIT_COUNT = new AtomicInteger(0);
 
@@ -51,10 +53,10 @@ public class RavenDBClient extends DB {
     Properties props = getProperties();
     serverUrl = props.getProperty("url", defaultServerUrl);
     database = props.getProperty("database", defaultDatabaseName);
-    IDocumentStore documentStore = new DocumentStore(serverUrl, database);
-    documentStore.initialize();
+    store = new DocumentStore(serverUrl, database);
+    store.initialize();
     ensureDatabaseCreated();
-    return documentStore;
+    return store;
   }
 
   private void ensureDatabaseCreated() {
@@ -133,10 +135,22 @@ public class RavenDBClient extends DB {
   @Override
   public Status insert(String table, String key, Map<String, ByteIterator> values) {
     try (IDocumentSession session = store.openSession()) {
-      session.store(values, key);
+      ObjectNode document = generateJsonFromFields(values, table);
+      session.store(document, key);
       session.saveChanges();
       return Status.OK;
     }
+  }
+
+  private ObjectNode generateJsonFromFields(Map<String, ByteIterator> values, String table) {
+    ObjectNode document = objectMapper.createObjectNode();
+    for(Map.Entry<String, ByteIterator> entry : values.entrySet()){
+      document.put(entry.getKey(), entry.getValue().toArray());
+    }
+    ObjectNode metadata = objectMapper.createObjectNode();
+    metadata.put("@collection", table);
+    document.set("@metadata", metadata);
+    return document;
   }
 
   @Override
